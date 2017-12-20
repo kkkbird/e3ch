@@ -86,47 +86,41 @@ func (clt *EtcdHRCHYClient) checkSubDir(dir string, name string) (firstDir strin
 func (clt *EtcdHRCHYClient) list(dir string, kvs []*mvccpb.KeyValue) ([]*Node, error) {
 	nodes := []*Node{}
 
-	names := []string{}
+	existDirName := make(map[string]int)
+	dirWithSubDir := make(map[string]int)
 
-	var err error
-	var node *Node
-
-	nameContained := func(names []string, key string) bool {
-		for _, n := range names {
-			if n == key {
-				return true
-			}
-		}
-		return false
-	}
 	for _, kv := range kvs {
 		name := strings.TrimPrefix(string(kv.Key), dir)
-		if strings.Contains(name, "/") {
-			// secondary directory
-			name, err = clt.checkSubDir(dir, name)
-			if err != nil {
-				fmt.Println("list error:", err)
-				continue
+		paths := strings.SplitN(name, "/", 2)
+		switch len(paths) {
+		case 1: //direct sub dir
+			if string(kv.Value) == clt.dirValue {
+				existDirName[name] = 1
 			}
-
-			if nameContained(names, name) {
-				continue
-			}
-
-			node, err = clt.Get(strings.TrimPrefix(dir+name, clt.rootKey))
-			if err != nil {
-				fmt.Println("list get node error:", err)
-				continue
-			}
-		} else {
-			if nameContained(names, name) {
-				continue
-			}
-			node = clt.createNode(kv)
+			nodes = append(nodes, clt.createNode(kv))
+		default:
+			dirWithSubDir[paths[0]] += 1
 		}
-
-		names = append(names, name)
-		nodes = append(nodes, node)
 	}
+
+	for k := range dirWithSubDir {
+		if _, ok := existDirName[k]; !ok {
+			realKey := strings.TrimPrefix(dir+k, clt.rootKey)
+
+			err := clt.put(realKey, clt.dirValue, true)
+			if err != nil {
+				fmt.Printf("Create %s error:%s\n", realKey, err)
+				continue
+			}
+			node, err := clt.Get(realKey)
+
+			if err != nil {
+				fmt.Printf("Get the new dir %s error:%s\n", realKey, err)
+				continue
+			}
+			nodes = append(nodes, node)
+		}
+	}
+
 	return nodes, nil
 }
